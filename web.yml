@@ -1,0 +1,130 @@
+- hosts: localhost
+  gather_facts: no
+  vars_files:
+  - sec.yml
+  tasks:
+  - name:
+    pip:
+      name: boto3
+      state: present
+
+
+     
+
+  - name: provision to os
+    ec2:
+      key_name: "linuxvm"
+      region: "ap-south-1"
+      instance_type: "t2.micro"
+      image: "ami-0e306788ff2473ccb"
+      wait: yes
+      group_id: "sg-04146921017907b57"
+      count: 2
+      vpc_subnet_id: "subnet-8f9dbfe7"
+      assign_public_ip: yes
+      aws_access_key: "{{ myuser }}"
+      aws_secret_key: "{{ mypass }}"
+      instance_tags:
+        Name: webserver
+        wait: yes
+    register: ec2
+
+  
+
+  - name: Add new instance to host group
+    add_host:
+      hostname: "{{ item.public_ip }}"
+      groupname: webserver
+    loop: "{{ ec2.instances }}"
+
+  - name: Wait for SSH to come up
+    wait_for:
+      host: "{{ item.public_dns_name }}"
+      port: 22
+      state: started
+    loop: "{{ ec2.instances }}"
+
+
+
+
+
+- hosts: webserver
+  gather_facts: no
+  tasks:
+  - name: running role
+    include_role:
+      name: httpdserver
+
+
+
+
+- hosts: localhost
+  gather_facts: no
+  vars_files:
+  - sec.yml
+  tasks:
+
+
+
+
+  - name: Creating Security Group for frontend loadbalancer server on AWS
+    ec2_group:
+      name: LBSG
+      description: Security Group for LB Server allowing port for http and ssh
+      region: "ap-south-1"
+      aws_access_key: "{{ myuser }}"
+      aws_secret_key: "{{ mypass }}"
+      rules:
+      - proto: tcp
+        from_port: 22
+        to_port: 22
+        cidr_ip: 0.0.0.0/0
+      - proto: tcp
+        from_port: 8080
+        to_port: 8080
+        cidr_ip: 0.0.0.0/0
+      rules_egress:
+      - proto: all
+        cidr_ip: 0.0.0.0/0
+
+
+
+  - name: launching ec2 instance for lbserver
+    ec2:
+      key_name: "linuxvm"
+      instance_type: t2.micro
+      image: ami-0e306788ff2473ccb
+      wait: true
+      group: LBSG
+      count: 1
+      vpc_subnet_id: "subnet-8f9dbfe7"
+      assign_public_ip: yes
+      region: ap-south-1
+      state: present
+      aws_access_key: "{{ myuser }}"
+      aws_secret_key: "{{ mypass }}"
+      instance_tags:
+        Name: lbserver
+    register: frontend
+
+
+  - name: Add new instance to host group lbserver
+    add_host:
+      hostname: "{{ item.public_ip }}"
+      groupname: lbserver
+    loop: "{{ frontend.instances }}"
+
+  - name: Wait for SSH to come up
+    wait_for:
+      host: "{{ item.public_dns_name }}"
+      port: 22
+      state: started
+    loop: "{{ frontend.instances }}"
+
+- hosts: lbserver
+  gather_facts: no
+  tasks:
+  - name: running role
+    include_role:
+      name: lbs
+
